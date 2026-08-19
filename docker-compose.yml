@@ -1,0 +1,63 @@
+# Self-hosted comparison platforms, each capped to the SAME resources as
+# CognoDB's free c0 instance (0.5 vCPU / 512MB RAM / 1GB disk) -- see the
+# "Note on fairness" section of the assignment and README.md's Methodology
+# section. Requires Docker Compose v2 ("docker compose ...", not the legacy
+# python docker-compose v1) for `cpus`/`mem_limit` to be honored outside
+# Swarm mode.
+#
+# Usage: docker compose up -d
+services:
+  neo4j:
+    image: neo4j:5.24-community
+    container_name: cognodb-bench-neo4j
+    ports:
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/benchmark-local-only
+      NEO4J_server_memory_heap_initial__size: 256m
+      NEO4J_server_memory_heap_max__size: 256m
+      NEO4J_server_memory_pagecache_size: 128m
+    cpus: 0.5
+    mem_limit: 512m
+    volumes:
+      - neo4j_data:/data
+
+  memgraph:
+    image: memgraph/memgraph:2.19.0
+    container_name: cognodb-bench-memgraph
+    command: ["--memory-limit=400"]
+    ports:
+      - "7688:7687"
+    cpus: 0.5
+    mem_limit: 512m
+    volumes:
+      - memgraph_data:/var/lib/memgraph
+
+  falkordb:
+    image: falkordb/falkordb:v4.6.2
+    container_name: cognodb-bench-falkordb
+    command: ["--maxmemory", "400mb"]
+    ports:
+      - "6379:6379"
+    cpus: 0.5
+    mem_limit: 512m
+    volumes:
+      - falkordb_data:/data
+
+  arangodb:
+    image: arangodb:3.12
+    container_name: cognodb-bench-arangodb
+    environment:
+      ARANGO_ROOT_PASSWORD: benchmark-local-only
+    ports:
+      - "8529:8529"
+    cpus: 0.5
+    mem_limit: 512m
+    volumes:
+      - arangodb_data:/var/lib/arangodb3
+
+volumes:
+  neo4j_data:
+  memgraph_data:
+  falkordb_data:
+  arangodb_data:
