@@ -1,0 +1,93 @@
+{
+  "platform": "memgraph",
+  "load": {
+    "node_count": 36692,
+    "edge_count": 367662,
+    "verified_node_count": 36692,
+    "verified_edge_count": 367662,
+    "node_load_seconds": 2.496,
+    "index_creation_seconds": 0.048,
+    "edge_load_seconds": 6621.191,
+    "total_load_seconds": 6623.734,
+    "nodes_per_second": 14701.7,
+    "relationships_per_second": 55.5,
+    "error": null
+  },
+  "indexes_created": {
+    "unique_id": "CREATE CONSTRAINT ON (p:Person) ASSERT p.id IS UNIQUE",
+    "dept_index": "CREATE INDEX ON :Person(dept)"
+  },
+  "workloads": {
+    "point_lookup": {
+      "p50_ms": 6.925,
+      "p95_ms": 53.506,
+      "p99_ms": 57.176,
+      "mean_ms": 14.149,
+      "n": 100
+    },
+    "filtered_lookup": {
+      "p50_ms": 1.23,
+      "p95_ms": 2.034,
+      "p99_ms": 2.28,
+      "mean_ms": 1.353,
+      "n": 100
+    },
+    "hop_1": {
+      "p50_ms": 6.518,
+      "p95_ms": 55.459,
+      "p99_ms": 57.0,
+      "mean_ms": 12.844,
+      "n": 100
+    },
+    "hop_2": {
+      "p50_ms": 6.54,
+      "p95_ms": 43.09,
+      "p99_ms": 51.188,
+      "mean_ms": 10.536,
+      "n": 100
+    },
+    "hop_3": {
+      "p50_ms": 5.888,
+      "p95_ms": 33.051,
+      "p99_ms": 47.702,
+      "mean_ms": 8.391,
+      "n": 100
+    },
+    "aggregation": {
+      "p50_ms": 182.51,
+      "p95_ms": 201.004,
+      "p99_ms": 206.008,
+      "mean_ms": 167.875,
+      "n": 100
+    }
+  },
+  "mixed_workload": {
+    "1": {
+      "concurrency": 1,
+      "duration_seconds": 20.01,
+      "total_ops": 1294,
+      "ops_per_second": 64.7,
+      "write_ratio": 0.1
+    },
+    "10": {
+      "concurrency": 10,
+      "duration_seconds": 20.47,
+      "total_ops": 533,
+      "ops_per_second": 26.0,
+      "write_ratio": 0.1
+    },
+    "40": {
+      "concurrency": 40,
+      "duration_seconds": 21.7,
+      "total_ops": 605,
+      "ops_per_second": 27.9,
+      "write_ratio": 0.1
+    }
+  },
+  "cold_start_ms": 11.081,
+  "footprint": {
+    "mem_usage": "138.3MiB / 512MiB",
+    "mem_percent": "27.02%",
+    "cpu_percent": "0.01%"
+  }
+}

@@ -59,10 +59,25 @@ def clear_existing(session):
     limits under the 512MB cap -- and silently swallowing that failure (as
     this used to do) leaves stale data behind, which then breaks the
     unique-id constraint on the next load with a confusing error that looks
-    like a fresh-load bug rather than a leftover-data one."""
+    like a fresh-load bug rather than a leftover-data one.
+
+    Batching by NODE count (even at 1,000/batch, even 10,000/batch) still
+    hit Neo4j's dbms.memory.transaction.total.max: this email graph is
+    power-law distributed -- some low-id nodes have degree 100+ rather than
+    the ~10 average, so a batch of 1,000 nodes can carry a much larger and
+    unpredictable number of relationship deletes. Bounding relationship and
+    node deletion SEPARATELY (delete relationships in batches until none
+    remain, then delete now-isolated nodes in batches) puts a predictable
+    ceiling on the actually-expensive operation instead of an indirect one."""
     while True:
         result = session.run(
-            "MATCH (n:Person) WITH n LIMIT 10000 DETACH DELETE n RETURN count(n) AS c"
+            f"MATCH ()-[r:EMAILED]->() WITH r LIMIT {BATCH_SIZE} DELETE r RETURN count(r) AS c"
+        ).single()
+        if result is None or result["c"] == 0:
+            break
+    while True:
+        result = session.run(
+            f"MATCH (n:Person) WITH n LIMIT {BATCH_SIZE} DELETE n RETURN count(n) AS c"
         ).single()
         if result is None or result["c"] == 0:
             break

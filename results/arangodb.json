@@ -1,0 +1,92 @@
+{
+  "platform": "arangodb",
+  "load": {
+    "node_count": 36692,
+    "edge_count": 367662,
+    "verified_node_count": 36692,
+    "verified_edge_count": 367662,
+    "node_load_seconds": 1.105,
+    "edge_load_seconds": 29.53,
+    "total_load_seconds": 30.636,
+    "nodes_per_second": 33200.5,
+    "relationships_per_second": 12450.3,
+    "error": null
+  },
+  "indexes_created": {
+    "unique_id": "persistent index on persons.id (unique)",
+    "dept_index": "persistent index on persons.dept"
+  },
+  "workloads": {
+    "point_lookup": {
+      "p50_ms": 48.054,
+      "p95_ms": 51.408,
+      "p99_ms": 52.598,
+      "mean_ms": 47.416,
+      "n": 100
+    },
+    "filtered_lookup": {
+      "p50_ms": 48.374,
+      "p95_ms": 52.244,
+      "p99_ms": 53.929,
+      "mean_ms": 48.43,
+      "n": 100
+    },
+    "hop_1": {
+      "p50_ms": 49.66,
+      "p95_ms": 52.599,
+      "p99_ms": 54.767,
+      "mean_ms": 49.646,
+      "n": 100
+    },
+    "hop_2": {
+      "p50_ms": 49.269,
+      "p95_ms": 52.514,
+      "p99_ms": 53.969,
+      "mean_ms": 49.254,
+      "n": 100
+    },
+    "hop_3": {
+      "p50_ms": 53.023,
+      "p95_ms": 71.349,
+      "p99_ms": 108.732,
+      "mean_ms": 56.895,
+      "n": 100
+    },
+    "aggregation": {
+      "p50_ms": 181.165,
+      "p95_ms": 269.592,
+      "p99_ms": 285.738,
+      "mean_ms": 169.902,
+      "n": 100
+    }
+  },
+  "mixed_workload": {
+    "1": {
+      "concurrency": 1,
+      "duration_seconds": 20.04,
+      "total_ops": 413,
+      "ops_per_second": 20.6,
+      "write_ratio": 0.1
+    },
+    "10": {
+      "concurrency": 10,
+      "duration_seconds": 20.05,
+      "total_ops": 3781,
+      "ops_per_second": 188.5,
+      "write_ratio": 0.1
+    },
+    "40": {
+      "concurrency": 40,
+      "duration_seconds": 20.1,
+      "total_ops": 4649,
+      "ops_per_second": 231.3,
+      "write_ratio": 0.1
+    }
+  },
+  "cold_start_ms": 20.04,
+  "footprint": {
+    "mem_usage": "431.9MiB / 512MiB",
+    "mem_percent": "84.35%",
+    "cpu_percent": "1.63%"
+  }
+}

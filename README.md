@@ -15,10 +15,13 @@
   sample on every platform.
 - **One command reproduces everything:** `scripts/run_all.ps1` (Windows) or
   `scripts/run_all.sh` (Linux/Mac) — see [Reproducing this benchmark](#reproducing-this-benchmark).
-- **Results:** see [Results](#results) below — populated by running the
-  harness against your own CognoDB free instance + local Docker containers
-  (see [Status of this repo](#status-of-this-repo) for exactly what has and
-  hasn't been executed so far).
+- **Results:** see [Results](#results) below — real numbers from a live run
+  against a CognoDB free instance and the local Docker stack, executed
+  2026-08-20 (see [Status of this repo](#status-of-this-repo)). FalkorDB is
+  the fastest single-client reader here by a wide margin but the first to
+  hit a hard concurrency ceiling; Memgraph is the slowest to load by two
+  orders of magnitude under this exact resource cap. Full breakdown in
+  [Analysis](#analysis).
 
 ## Table of contents
 
@@ -195,41 +198,156 @@ end-to-end with no paid resources.
 ## Results
 
 <!-- RESULTS:START -->
-_Not yet generated — run `scripts/run_all.ps1` (or `run_all.sh`) against a
-real CognoDB free instance and the Docker Compose stack, then
-`python src/report/aggregate_results.py` will replace this section with the
-full results matrix and charts. See [Status of this repo](#status-of-this-repo)._
+### Data loading
+
+| Platform | Nodes/sec | Rels/sec | Index creation (s) | Total load time (s) | Verified count matches source? | Load error | Cleanup error |
+|---|---|---|---|---|---|---|---|
+| cognodb | 1400.4 | 1807.5 | 0.874 | 230.489 | yes | none | none |
+| neo4j | 1863.9 | 7328.7 | 0.097 | 69.95 | yes | none | none |
+| memgraph | 14701.7 | 55.5 | 0.048 | 6623.734 | yes | none | none |
+| falkordb | 14556.0 | 13449.5 | 0.04 | 29.897 | yes | none | none |
+| arangodb | 33200.5 | 12450.3 | n/a | 30.636 | yes | none | none |
+
+### Indexes actually created
+
+| Platform | unique id index | dept index |
+|---|---|---|
+| cognodb | CREATE CONSTRAINT person_id IF NOT EXISTS FOR (p:Person) REQUIRE p.id IS UNIQUE | CREATE INDEX person_dept IF NOT EXISTS FOR (p:Person) ON (p.dept) |
+| neo4j | CREATE CONSTRAINT person_id IF NOT EXISTS FOR (p:Person) REQUIRE p.id IS UNIQUE | CREATE INDEX person_dept IF NOT EXISTS FOR (p:Person) ON (p.dept) |
+| memgraph | CREATE CONSTRAINT ON (p:Person) ASSERT p.id IS UNIQUE | CREATE INDEX ON :Person(dept) |
+| falkordb | CREATE INDEX FOR (p:Person) ON (p.id) | CREATE INDEX FOR (p:Person) ON (p.dept) |
+| arangodb | persistent index on persons.id (unique) | persistent index on persons.dept |
+
+### Cold start (first query after connecting, before warm-up; see Caveats for cross-platform measurement differences)
+
+| Platform | Cold-start first query (ms) |
+|---|---|
+| cognodb | 300.169 |
+| neo4j | 3450.294 |
+| memgraph | 11.081 |
+| falkordb | 1.875 |
+| arangodb | 20.04 |
+
+### Traversals, lookups & aggregation (p50 / p95, ms; warmed-up)
+
+| Platform | point_lookup p50/p95 (ms) | filtered_lookup p50/p95 (ms) | hop_1 p50/p95 (ms) | hop_2 p50/p95 (ms) | hop_3 p50/p95 (ms) | aggregation p50/p95 (ms) |
+|---|---|---|---|---|---|---|
+| cognodb | 296.323 / 370.642 | 310.367 / 367.842 | 310.659 / 409.646 | 324.321 / 430.471 | 336.473 / 455.422 | 637.725 / 801.356 |
+| neo4j | 8.918 / 83.876 | 12.08 / 91.787 | 6.111 / 80.992 | 9.798 / 80.678 | 9.376 / 67.684 | 172.181 / 378.215 |
+| memgraph | 6.925 / 53.506 | 1.23 / 2.034 | 6.518 / 55.459 | 6.54 / 43.09 | 5.888 / 33.051 | 182.51 / 201.004 |
+| falkordb | 0.509 / 0.632 | 0.605 / 0.802 | 0.528 / 0.698 | 0.785 / 1.119 | 1.137 / 2.784 | 175.686 / 200.38 |
+| arangodb | 48.054 / 51.408 | 48.374 / 52.244 | 49.66 / 52.599 | 49.269 / 52.514 | 53.023 / 71.349 | 181.165 / 269.592 |
+
+![traversal p95](charts/traversal_p95.png)
+
+### Mixed read/write workload
+
+| Platform | 1 clients (ops/sec) | 10 clients (ops/sec) | 40 clients (ops/sec) |
+|---|---|---|---|
+| cognodb | 3.0 | 29.9 | 107.4 |
+| neo4j | 104.8 | 95.7 | 125.8 |
+| memgraph | 64.7 | 26.0 | 27.9 |
+| falkordb | 1234.8 | 549.6 | error: Max pending queries exceeded |
+| arangodb | 20.6 | 188.5 | 231.3 |
+
+![mixed workload throughput](charts/mixed_workload_throughput.png)
+
+### Footprint
+
+| Platform | Footprint |
+|---|---|
+| cognodb | not observable -- CognoDB's managed free tier does not expose memory/CPU/storage metrics to the client driver or a public metrics API. Documented per the assignment's own allowance in section 5.2 rather than estimated. |
+| neo4j | 507.6MiB / 512MiB |
+| memgraph | 138.3MiB / 512MiB |
+| falkordb | 94.98MiB / 512MiB |
+| arangodb | 431.9MiB / 512MiB |
+
 <!-- RESULTS:END -->
 
 ## Analysis
 
-_To be filled in after a real run — see [Status of this repo](#status-of-this-repo).
-The template below is what this section will cover once results exist; do not
-read it as a claim that these are the actual findings._
+_Written against the real numbers in [Results](#results) above, from a run
+executed 2026-08-20 against a live CognoDB `c0` instance and the Docker
+Compose stack. Every number referenced below is quoted directly from that
+run's `results/*.json`; nothing here is a projection._
 
-- **Ingest throughput:** compare nodes/sec and rels/sec across the batched
-  `UNWIND`/`insert_many` loaders; call out whether CognoDB's free-tier
-  burstable CPU causes ingest to fall off partway through the load (a
-  common burstable-tier pattern) versus the fixed-allocation Docker
-  containers.
-- **Traversal latency vs. hop depth:** whether p95 latency grows linearly,
-  worse, or better than linearly with hop depth per platform — this is
-  usually the most architecturally revealing number in a graph-DB
-  comparison (native graph storage vs. adjacency-list-over-KV vs.
-  matrix-multiplication engines like FalkorDB should show different growth
-  curves).
-- **Lookup latency:** point lookup vs. filtered/indexed lookup gap per
-  platform — a big gap implies the index isn't being used the way it is on
-  other platforms (see the "indexes actually created" table — index DDL
-  silently failing on one platform is a realistic outcome worth catching,
-  not hiding).
-- **Mixed workload scaling:** which platforms keep scaling ops/sec from 1
-  to 10 to 40 clients, and which plateau or regress — plateauing under a
-  0.5 vCPU cap is expected and not a knock against any vendor; the point is
-  documenting *where* each one plateaus.
-- **Root-cause notes:** tie back to each platform's storage model (native
-  graph vs. property graph over a KV/relational core vs. GraphBLAS sparse
-  matrices) rather than stopping at "X was faster than Y."
+**Ingest throughput spans three orders of magnitude, and the biggest gap
+isn't CognoDB.** ArangoDB (12,450 rels/sec) and FalkorDB (13,450 rels/sec)
+loaded the identical 367,662-edge batch in ~30 seconds each. Neo4j managed
+7,329 rels/sec (70s total). CognoDB, network-bound and burst-CPU-limited,
+landed at 1,807 rels/sec (230s total) — slow, but it *completed*, and its
+node/edge counts verified exactly against the source. **Memgraph is the
+real outlier: 55.5 rels/sec, a 6,624-second (~110 minute) total load** —
+running the exact same `UNWIND`/`MATCH`/`CREATE` Cypher, through the same
+Python driver code path, as Neo4j. Its container's own memory footprint
+afterward was only 138MiB/512MiB (27%) — so this isn't memory exhaustion,
+which points instead at something in Memgraph's default write-durability
+path (e.g. WAL fsync behavior per transaction) rather than a resource cap
+being hit. This is worth independent verification before treating it as a
+general Memgraph characteristic rather than a default-config artifact.
+
+**Traversal latency: FalkorDB is in a different class, and the p50/p95 gap
+is a memory-pressure story for Neo4j.** FalkorDB's 1/2/3-hop p50s are
+sub-millisecond (0.53 / 0.79 / 1.14ms) with p95s barely higher — its
+GraphBLAS/sparse-matrix engine is simply built for exactly this shape of
+query. Memgraph and Neo4j both post reasonable p50s (5-10ms) but a **10x
+p50-to-p95 gap** (e.g. Neo4j hop_1: 6.1ms p50 → 81.0ms p95). Neo4j's
+container was sitting at **99.14% of its 512MB cap** by the end of the run
+— that's consistent with occasional GC-pressure spikes producing a long
+tail, rather than the query itself being unpredictable. ArangoDB sits in
+the middle (~50ms flat across all three hop depths — AQL traversal
+overhead dominates over hop count in this range) and CognoDB's numbers
+(310-336ms p50) are dominated by the India ↔ us-east4 round trip, not query
+cost — see the network caveat below.
+
+**Point vs. filtered lookup, and whether indexes actually got used:** every
+platform's `CREATE CONSTRAINT`/`CREATE INDEX` statement succeeded (see the
+"Indexes actually created" table — no silent fallback to unindexed). Most
+platforms show filtered lookup costing about the same as or slightly more
+than point lookup, as expected for an indexed property scan returning up to
+50 rows. Memgraph is the one exception (filtered: 1.23ms p50 vs. point:
+6.93ms p50, filtered *faster*) — plausibly just favorable cache/GC timing
+between the two categories rather than a real structural advantage; noted,
+not overclaimed.
+
+**Mixed workload scaling separates the platforms by concurrency model, not
+raw speed.** CognoDB (3 → 30 → 107 ops/sec) and ArangoDB (21 → 189 → 231
+ops/sec) both scale *up* with concurrency — for CognoDB because more
+parallel clients hide per-request network latency; for ArangoDB because
+it's built for concurrent multi-client access. Neo4j is roughly flat
+(105 → 96 → 126), consistent with being CPU/memory-capped rather than
+concurrency-capped. **Memgraph degrades under concurrent load** (65 → 26 →
+28 ops/sec) — the same write-path cost visible in its load numbers shows up
+again the moment the workload includes writes (10% of this mixed workload
+is writes). **FalkorDB is the sharpest story: 1,235 → 550 → outright
+failure** at 40 clients with `Max pending queries exceeded` — its own
+`MODULE LIST` reports `MAX_QUEUED_QUERIES: 25`, a hard admission-control
+limit, not a graceful slowdown. FalkorDB is the fastest single-client engine
+in this entire benchmark and the first one to refuse work outright under
+load — a genuine architectural trade-off, not a flaw to average away.
+
+**Footprint corroborates rather than just decorates.** Neo4j (99.14%) and
+ArangoDB (84.35%, Enterprise Edition per the caveat below) both ran hot;
+Memgraph (27.02%) and FalkorDB (18.55%) had substantial headroom left.
+Reading footprint next to latency variance and mixed-workload scaling
+turns three separate metrics into one coherent story per platform rather
+than three unrelated numbers.
+
+**Root-cause summary, one line per platform:**
+- **CognoDB** — correctness is solid (every count verified, zero query
+  errors); its absolute latency numbers are dominated by an unavoidable
+  cross-continent network hop on the free tier, not the query engine.
+- **Neo4j** — the most "average" performer end-to-end, but running right at
+  its memory ceiling, which shows up as p95/p99 tail latency and a
+  3.45-second cold-start query-plan-cache warm-up.
+- **Memgraph** — fast, low-memory reads; a serious, reproducible write-path
+  cost under this exact resource cap that dominates both load time and
+  mixed-workload throughput.
+- **FalkorDB** — the fastest read engine here by a wide margin, gated by a
+  low default concurrent-query ceiling rather than a capacity limit.
+- **ArangoDB** — the most balanced all-rounder in this run (fast load,
+  moderate flat latency, the best concurrency scaling) — with the caveat
+  that this is Enterprise Edition, not Community.
 
 ## Caveats & honest limitations
 
@@ -313,17 +431,30 @@ read it as a claim that these are the actual findings._
 
 ## Status of this repo
 
-Written and verified as of 2026-08-19:
+Updated 2026-08-20 — **fully executed end-to-end** against a live CognoDB
+Cloud free instance (`db-51aaa980`, `us-east4`, v0.9.11) and the full Docker
+Compose stack (Neo4j, Memgraph, FalkorDB, ArangoDB):
 
-- ✅ Dataset pipeline (`data/download_dataset.py`, `data/prepare_dataset.py`)
-  — downloads the real SNAP dataset and generates `nodes.csv` / `edges.csv`
-  / `sample_start_nodes.json`. **Actually run**, output: 36,692 nodes /
-  367,662 edges.
-- ✅ Loaders and workload runners for all 5 platforms — written, code-reviewed
-  for consistency, not yet executed end-to-end against live databases.
-- ⬜ **Not yet executed:** signing up for CognoDB Cloud, running
-  `docker compose up`, and running the full benchmark requires credentials
-  and a Docker daemon that only you can provide/run — see
-  [Reproducing this benchmark](#reproducing-this-benchmark). Until that
-  happens, the [Results](#results) section above is a placeholder, not
-  data — do not submit this repo without running it first.
+- ✅ Dataset pipeline — 36,692 nodes / 367,662 edges, downloaded and
+  processed for real.
+- ✅ All 5 platforms loaded, verified (`verified_node_count`/
+  `verified_edge_count` match the source exactly for every platform), and
+  benchmarked across every required metric in assignment §5.2. The
+  [Results](#results) section above and every number in [Analysis](#analysis)
+  are from that real run — not placeholders, not projections.
+- ✅ Two real bugs were found and fixed *during* this run, not hidden after
+  the fact — see `docs/PROJECT_LOG.md` for the full account: an AQL
+  traversal query bug that briefly zeroed out ArangoDB's hop/mixed-workload
+  results (fixed, re-run, now valid), and a Neo4j cleanup-transaction sizing
+  issue that initially produced invalid load-timing numbers (fixed, re-run,
+  now valid — this is also why `src/loaders/load_cypher_family.py` and
+  `load_falkordb.py` delete relationships and nodes in separately-bounded
+  batches rather than one combined batch).
+- ✅ One result is an intentionally-preserved genuine finding, not a bug:
+  FalkorDB's mixed workload fails outright at 40 concurrent clients
+  (`Max pending queries exceeded`, tied to its own `MAX_QUEUED_QUERIES: 25`
+  config) — see [Analysis](#analysis).
+- ⬜ Run-to-run variance (repeating the full pipeline N times) was
+  deliberately not pursued given the submission deadline — flagged as a
+  stretch item in [Caveats](#caveats--honest-limitations), not silently
+  omitted.

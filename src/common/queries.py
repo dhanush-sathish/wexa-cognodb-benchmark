@@ -38,11 +38,19 @@ AQL_POINT_LOOKUP = "FOR p IN persons FILTER p.id == @id RETURN {id: p.id, email_
 
 AQL_FILTERED_LOOKUP = "FOR p IN persons FILTER p.dept == @dept LIMIT 50 RETURN p.id"
 
-AQL_HOP_1 = "FOR v IN 1..1 OUTBOUND @start emailed OPTIONS {uniqueVertices: 'global'} LIMIT 100 RETURN v.id"
 
-AQL_HOP_2 = "FOR v IN 2..2 OUTBOUND @start emailed OPTIONS {uniqueVertices: 'global'} LIMIT 100 RETURN v.id"
+# uniqueVertices: 'global' requires an explicit traversal order in this
+# ArangoDB version ("uniqueVertices: 'global' is only supported, with
+# order: bfs|weighted") -- bfs matches the logical semantics of the Cypher
+# hop queries above (nearest-first, not depth-first).
+AQL_HOP_1 = ("FOR v IN 1..1 OUTBOUND @start emailed "
+             "OPTIONS {uniqueVertices: 'global', order: 'bfs'} LIMIT 100 RETURN v.id")
 
-AQL_HOP_3 = "FOR v IN 3..3 OUTBOUND @start emailed OPTIONS {uniqueVertices: 'global'} LIMIT 100 RETURN v.id"
+AQL_HOP_2 = ("FOR v IN 2..2 OUTBOUND @start emailed "
+             "OPTIONS {uniqueVertices: 'global', order: 'bfs'} LIMIT 100 RETURN v.id")
+
+AQL_HOP_3 = ("FOR v IN 3..3 OUTBOUND @start emailed "
+             "OPTIONS {uniqueVertices: 'global', order: 'bfs'} LIMIT 100 RETURN v.id")
 
 AQL_AGGREGATION = (
     "FOR p IN persons "

@@ -62,11 +62,19 @@ def main():
     # 367,662 relationships can exceed the 512MB cap, and silently
     # swallowing that failure leaves stale data behind that then breaks the
     # next load with a confusing "already exists" error instead of a clear
-    # cleanup-failed one.
+    # cleanup-failed one. Relationships and nodes are bounded SEPARATELY --
+    # this email graph is power-law distributed (some nodes have degree
+    # 100+, not the ~10 average), so batching by node count alone still let
+    # a single transaction's relationship-delete count balloon unpredictably
+    # and hit Neo4j's transaction memory cap in practice.
     cleanup_error = None
     try:
         while True:
-            res = g.query("MATCH (n:Person) WITH n LIMIT 10000 DETACH DELETE n RETURN count(n) AS c")
+            res = g.query(f"MATCH ()-[r:EMAILED]->() WITH r LIMIT {BATCH_SIZE} DELETE r RETURN count(r) AS c")
+            if not res.result_set or res.result_set[0][0] == 0:
+                break
+        while True:
+            res = g.query(f"MATCH (n:Person) WITH n LIMIT {BATCH_SIZE} DELETE n RETURN count(n) AS c")
             if not res.result_set or res.result_set[0][0] == 0:
                 break
     except Exception as e:

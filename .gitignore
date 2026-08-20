@@ -32,12 +32,14 @@ htmlcov/
 .ipynb_checkpoints/
 
 # --- Dataset & generated outputs ---
+# data/raw and data/processed are regenerable via download_dataset.py /
+# prepare_dataset.py and are large -- not committed.
+# results/*.json and charts/*.png ARE committed on purpose: the README
+# embeds the chart images directly (broken links on GitHub otherwise), and
+# the raw results JSON back up this repo's "raw numbers included" claim
+# with something a reviewer can actually open, not just regenerate.
 data/raw/
 data/processed/
-results/*
-!results/.gitkeep
-charts/*
-!charts/.gitkeep
 
 # --- Logs ---
 *.log

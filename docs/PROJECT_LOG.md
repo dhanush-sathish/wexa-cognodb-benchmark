@@ -197,10 +197,56 @@ kicked off the real `scripts/run_all.ps1` run. Two real findings:
   project's dependencies there. No lasting effect, but worth remembering:
   always use `.venv` for this project, never the global interpreter.
 
-**Not yet done, flagged as optional given the 48h window:** run-to-run
-variance (running the full pipeline N times and reporting spread) — the
-assignment lists this as a "strong submission" trait, not a requirement.
-Deferred pending a decision on whether there's time after the first full run.
+## Session 3 continued: real run completed, two more bugs caught and fixed
+
+The full pipeline (all 5 loads, all 5 workloads, footprint, report) ran to
+completion. Two more real issues surfaced from actually running against
+live data, on top of the ones above:
+
+- **ArangoDB's AQL hop queries were flat-out broken**: `uniqueVertices:
+  'global'` requires an explicit `order: 'bfs'|'weighted'` on this ArangoDB
+  version, which `src/common/queries.py`'s `AQL_HOP_1/2/3` never specified.
+  Every 1/2/3-hop query and the entire mixed workload (which reads via
+  `AQL_HOP_1`) failed with an HTTP 400 across all three concurrency levels
+  — a real, complete gap, not a caveat-worthy asymmetry. Fixed by adding
+  `order: 'bfs'` (matches the Cypher queries' nearest-first semantics),
+  verified against a live query, then re-ran `run_arangodb.py` alone (data
+  was already correctly loaded, so only the workload needed re-running).
+- **Neo4j's batched cleanup still wasn't safe, twice over.** The Session 3
+  fix (batch DETACH DELETE by 10,000 nodes instead of unbounded) still hit
+  `Neo.TransientError.General.MemoryPoolOutOfMemoryError` on a live re-run
+  — dropping the batch size to 1,000 made no difference, and neither did
+  restarting the container to rule out accumulated memory pressure. Root
+  cause: this email graph is power-law distributed (checked directly —
+  several low-id nodes have degree 100+ against a ~10 average), so bounding
+  by *node* count still let a single transaction's *relationship*-delete
+  count balloon unpredictably. Fixed by bounding relationships and nodes
+  **separately**: delete `EMAILED` relationships in batches until none
+  remain, then delete now-isolated `Person` nodes in batches. Verified:
+  re-ran cleanly, `cleanup_error: None`, exact count match. Applied the
+  same fix to `load_falkordb.py` pre-emptively (same graph, same risk,
+  hadn't manifested yet only because FalkorDB never had leftover data to
+  clean up in any run so far).
+- One result was investigated and confirmed as a genuine finding, not a
+  bug: FalkorDB's mixed workload fails outright at 40 concurrent clients
+  (`Max pending queries exceeded`) — its own `MODULE LIST` reports
+  `MAX_QUEUED_QUERIES: 25`. Left as-is and written up in Analysis rather
+  than "fixed," since it's real information about the platform.
+- Real, final numbers: Memgraph took ~110 minutes to load (55.5 rels/sec)
+  vs. ArangoDB/FalkorDB at ~30 seconds (12-13k rels/sec) — same dataset,
+  same fairness-enforced resource cap, dramatically different result.
+  Memgraph's container was only using 27% of its memory limit afterward,
+  so this isn't memory exhaustion; likely a default write-durability
+  setting, flagged in the README as worth independent verification rather
+  than stated as certain.
+- README's Analysis section and ARTICLE.md's `[TBD]` sections are now
+  filled in with real findings from this run — no placeholders remain in
+  either file (verified via grep).
+
+**Deliberately not pursued, given the submission deadline:** run-to-run
+variance (repeating the full pipeline N times) — the assignment lists it
+as a "strong submission" trait, not a requirement; flagged honestly in the
+README's Caveats rather than silently dropped.
 
 ## Suggested next steps (for you)
 
