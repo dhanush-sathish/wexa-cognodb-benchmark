@@ -151,6 +151,52 @@ and fixed:
   table) dry-run tested against synthetic results in an isolated scratch copy
   — the real `README.md`/`results/` were not touched by that test.
 
+## Session 3 (2026-08-20): first real run surfaced a genuine loader bug
+
+Set up CognoDB Cloud (`db-51aaa980`, `us-east4`, v0.9.11) and the Docker
+stack, confirmed all 5 platforms reachable via `check_connections.py`, then
+kicked off the real `scripts/run_all.ps1` run. Two real findings:
+
+- **CognoDB's edge load failed: 36,692 nodes loaded, but 0 relationships
+  landed**, with `Neo.TransientError.General.OutOfTimeError — context
+  deadline exceeded`. Confirmed independently from the CognoDB console
+  itself (Overview tab showed Nodes: 36,692, Relationships: 0).
+- **Root cause, not just "free tier is slow":** `load_cypher_family.py` and
+  `load_falkordb.py` created the `Person.id` index/constraint *after*
+  loading edges, not before. Every edge insert does `MATCH (a:Person {id:
+  ...}), (b:Person {id: ...})` to find its endpoints — without an index
+  that's a full label scan per lookup, twice per edge, across 367,662
+  edges. Locally this made Neo4j's load take 12+ minutes (never finished
+  before being killed) instead of the ~1 minute it should take; against
+  CognoDB's burst-limited 0.5vCPU free tier it was slow enough to hit the
+  server's own query timeout.
+- **Fixed:** both loaders now create indexes immediately after node load
+  and before edge load, with a new `index_creation_seconds` field reported
+  separately from `edge_load_seconds` so the README's load table shows
+  exactly how much time indexing itself took per platform. Verified fix:
+  re-ran Neo4j's loader alone, total load time 12+ min (incomplete) →
+  57.2s, with `verified_edge_count` now matching the source exactly
+  (367,662/367,662). ArangoDB's loader was never affected (it inserts by
+  explicit `_from`/`_to` keys, no `MATCH` lookup involved).
+- Also caught and fixed a real Docker Compose bug unrelated to the above:
+  `docker-compose.yml`'s FalkorDB service used `command: ["--maxmemory",
+  "400mb"]`, which replaced the image's default CMD (a script that builds
+  the `redis-server ... --loadmodule falkordb.so` invocation from
+  `REDIS_ARGS`/`FALKORDB_ARGS` env vars) — the container ran as plain
+  Redis with the graph module never loaded (`GRAPH.QUERY` → "unknown
+  command", `MODULE LIST` empty). Fixed by setting `REDIS_ARGS` and
+  `BROWSER=0` as environment variables instead of overriding `command:`.
+- Also noted for the README's caveats: the public `arangodb:3.12` Docker
+  Hub image resolves to Enterprise Edition (confirmed from its own startup
+  log), not Community — not a deliberate choice, just what the tag
+  resolves to, but worth disclosing.
+- Housekeeping: accidentally ran the first `pip install -r requirements.txt`
+  against the global Python instead of a venv, downgrading numpy/matplotlib/
+  pytest/python-dotenv already installed there. Caught immediately, restored
+  the original global versions, then created `.venv` properly and moved the
+  project's dependencies there. No lasting effect, but worth remembering:
+  always use `.venv` for this project, never the global interpreter.
+
 **Not yet done, flagged as optional given the 48h window:** run-to-run
 variance (running the full pipeline N times and reporting spread) — the
 assignment lists this as a "strong submission" trait, not a requirement.

@@ -57,13 +57,23 @@ def main():
     db = FalkorDB(host=cfg["host"], port=cfg["port"])
     g = db.select_graph(cfg["graph"])
 
+    # Delete in bounded batches, same reasoning as load_cypher_family.py's
+    # clear_existing(): an unbounded DETACH DELETE over 36,692 nodes /
+    # 367,662 relationships can exceed the 512MB cap, and silently
+    # swallowing that failure leaves stale data behind that then breaks the
+    # next load with a confusing "already exists" error instead of a clear
+    # cleanup-failed one.
+    cleanup_error = None
     try:
-        g.query("MATCH (n:Person) DETACH DELETE n")
-    except Exception:
-        pass
+        while True:
+            res = g.query("MATCH (n:Person) WITH n LIMIT 10000 DETACH DELETE n RETURN count(n) AS c")
+            if not res.result_set or res.result_set[0][0] == 0:
+                break
+    except Exception as e:
+        cleanup_error = str(e)
 
     load_error = None
-    t0 = t_nodes = t_edges = time.perf_counter()
+    t0 = t_nodes = t_index = t_edges = time.perf_counter()
     try:
         for i in range(0, len(nodes), BATCH_SIZE):
             batch = nodes[i:i + BATCH_SIZE]
@@ -72,23 +82,35 @@ def main():
                 params={"rows": batch},
             )
         t_nodes = time.perf_counter()
-
-        for i in range(0, len(edges), BATCH_SIZE):
-            batch = edges[i:i + BATCH_SIZE]
-            g.query(
-                "UNWIND $rows AS row MATCH (a:Person {id: row.src}), (b:Person {id: row.dst}) "
-                "CREATE (a)-[:EMAILED]->(b)",
-                params={"rows": batch},
-            )
-        t_edges = time.perf_counter()
     except Exception as e:
         load_error = str(e)
-        t_edges = time.perf_counter()
+        t_nodes = time.perf_counter()
 
+    # Index must exist BEFORE loading edges -- see the matching comment in
+    # load_cypher_family.py. Without it, every edge's MATCH (a:Person {id:
+    # ...}) is an unindexed full scan across all 36,692 nodes, twice per
+    # edge, 367,662 edges -- catastrophically slow instead of a fast lookup.
     try:
         indexes = create_indexes(g)
     except Exception as e:
         indexes = {"error": str(e)}
+    t_index = time.perf_counter()
+
+    if load_error is None:
+        try:
+            for i in range(0, len(edges), BATCH_SIZE):
+                batch = edges[i:i + BATCH_SIZE]
+                g.query(
+                    "UNWIND $rows AS row MATCH (a:Person {id: row.src}), (b:Person {id: row.dst}) "
+                    "CREATE (a)-[:EMAILED]->(b)",
+                    params={"rows": batch},
+                )
+            t_edges = time.perf_counter()
+        except Exception as e:
+            load_error = str(e)
+            t_edges = time.perf_counter()
+    else:
+        t_edges = t_index
 
     try:
         verified_nodes = g.query("MATCH (n:Person) RETURN count(n) AS c").result_set[0][0]
@@ -97,7 +119,8 @@ def main():
         verified_nodes = verified_edges = None
 
     node_load_s = t_nodes - t0
-    edge_load_s = t_edges - t_nodes
+    index_creation_s = t_index - t_nodes
+    edge_load_s = t_edges - t_index
     total_s = t_edges - t0
 
     result = {
@@ -107,11 +130,13 @@ def main():
             "verified_node_count": verified_nodes,
             "verified_edge_count": verified_edges,
             "node_load_seconds": round(node_load_s, 3),
+            "index_creation_seconds": round(index_creation_s, 3),
             "edge_load_seconds": round(edge_load_s, 3),
             "total_load_seconds": round(total_s, 3),
             "nodes_per_second": round(len(nodes) / node_load_s, 1) if node_load_s > 0 else None,
             "relationships_per_second": round(len(edges) / edge_load_s, 1) if edge_load_s > 0 else None,
             "error": load_error,
+            "cleanup_error": cleanup_error,
         },
         "indexes_created": indexes,
     }

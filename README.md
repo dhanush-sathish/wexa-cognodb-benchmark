@@ -127,10 +127,15 @@ This is a deliberate, stated choice — see [Caveats](#caveats--honest-limitatio
   (`src/common/queries.py`) are shared verbatim across CognoDB/Neo4j/
   Memgraph/FalkorDB; AQL translations for ArangoDB express the identical
   logical query (same hop depth, same filter, same aggregation).
-- **Cold start:** the very first query issued on a fresh connection (before
-  any warm-up) is timed separately and reported as `cold_start_ms`, distinct
-  from every category's warmed-up p50/p95/p99 below — see the assignment's
-  "what a strong submission looks like" note on separating warm vs. cold
+- **Cold start:** the first query issued after connecting, before any
+  warm-up iterations, is timed separately and reported as `cold_start_ms`.
+  Precisely: the driver's connection handshake (`verify_connectivity()`)
+  happens first and is *not* included in this number — `cold_start_ms`
+  isolates first-query cost (query planning/caching cold, no prior page
+  cache warmth) from raw network/TLS handshake cost, rather than bundling
+  both under one label. It's still distinct from every category's
+  warmed-up p50/p95/p99 below — see the assignment's "what a strong
+  submission looks like" note on separating warm vs. cold
   numbers.
 - **Warm-up:** 20 untimed iterations per query category before measurement.
 - **Measurement:** 100 timed iterations per read workload (exceeds the
@@ -266,6 +271,35 @@ read it as a claim that these are the actual findings._
 - **AQL vs. Cypher is not a pure performance variable.** ArangoDB's numbers
   reflect both the engine *and* a different query formulation; direct
   ArangoDB-vs-Cypher-platform deltas should be read with that in mind.
+- **The public `arangodb:3.12` Docker image is Enterprise Edition**, not
+  Community — confirmed from its own startup log (`ArangoDB (version
+  3.12.10-1 enterprise [linux])`). This wasn't a deliberate choice; it's
+  simply what the tag on Docker Hub resolves to. Enterprise may have
+  different performance characteristics than the Community edition a real
+  free-tier evaluator would run, so ArangoDB's numbers should be read as
+  "Enterprise Edition capped to free-tier-equivalent resources," not
+  "ArangoDB Community."
+- **Edge loads for every Cypher-family platform (CognoDB/Neo4j/Memgraph/
+  FalkorDB) create the `Person.id` index/constraint *before* loading edges,
+  not after.** Each edge insert does `MATCH (a:Person {id: ...}), (b:Person
+  {id: ...})` to find its endpoints; without an index that's a full label
+  scan per lookup, twice per edge, across all 367,662 edges. An earlier,
+  unindexed-until-the-end version of this loader took Neo4j from an expected
+  well-under-a-minute load to 12+ minutes locally, and is almost certainly
+  why CognoDB's edge load hit a server-side timeout on its burst-limited CPU
+  (see the loaders' `index_creation_seconds` field, reported separately from
+  `edge_load_seconds` in the Results load table, for exactly how much time
+  each platform's index build itself took).
+- **`cold_start_ms` is not measured on a perfectly identical basis across all
+  5 platforms.** For CognoDB/Neo4j/Memgraph, the Bolt driver's
+  `verify_connectivity()` call completes the TCP/TLS/Bolt handshake *before*
+  `cold_start_ms` starts timing, so it isolates first-query cost (cold query
+  plan cache, cold page cache) from connection setup. ArangoDB's and
+  FalkorDB's clients have no equivalent eager-connect step in this harness,
+  so their `cold_start_ms` may also be absorbing some connection-establishment
+  cost. Treat cross-platform `cold_start_ms` comparisons involving ArangoDB
+  or FalkorDB as directional, not precise — the within-platform warm vs.
+  cold contrast is still valid for every platform individually.
 
 ## How this repo maps to the evaluation criteria
 

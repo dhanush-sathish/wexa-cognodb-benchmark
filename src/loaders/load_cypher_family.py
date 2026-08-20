@@ -52,6 +52,22 @@ def create_indexes(session):
     return created
 
 
+def clear_existing(session):
+    """Delete any leftover Person nodes/relationships in bounded batches. An
+    unbounded `MATCH (n) DETACH DELETE n` over 36,692 nodes / 367,662
+    relationships in one transaction risks exceeding memory/transaction
+    limits under the 512MB cap -- and silently swallowing that failure (as
+    this used to do) leaves stale data behind, which then breaks the
+    unique-id constraint on the next load with a confusing error that looks
+    like a fresh-load bug rather than a leftover-data one."""
+    while True:
+        result = session.run(
+            "MATCH (n:Person) WITH n LIMIT 10000 DETACH DELETE n RETURN count(n) AS c"
+        ).single()
+        if result is None or result["c"] == 0:
+            break
+
+
 def load_nodes(session, rows):
     for i in range(0, len(rows), BATCH_SIZE):
         batch = rows[i:i + BATCH_SIZE]
@@ -88,27 +104,45 @@ def main():
     driver.verify_connectivity()
 
     load_error = None
+    cleanup_error = None
     verified_nodes = verified_edges = None
     with driver.session() as session:
         try:
-            session.run("MATCH (n:Person) DETACH DELETE n").consume()
-        except Exception:
-            pass
+            clear_existing(session)
+        except Exception as e:
+            cleanup_error = str(e)
 
-        t0 = t_nodes = t_edges = time.perf_counter()
+        t0 = t_nodes = t_index = t_edges = time.perf_counter()
         try:
             load_nodes(session, nodes)
             t_nodes = time.perf_counter()
-            load_edges(session, edges)
-            t_edges = time.perf_counter()
         except Exception as e:
             load_error = str(e)
-            t_edges = time.perf_counter()
+            t_nodes = time.perf_counter()
 
+        # Index/constraint on Person.id must exist BEFORE loading edges: every
+        # edge insert below does `MATCH (a:Person {id: ...})` to find its
+        # endpoints, and without an index that MATCH is a full label scan
+        # across all 36,692 nodes -- twice per edge, 367,662 edges. That
+        # made a local Neo4j load take 12+ minutes instead of under a
+        # minute in an earlier run, and is almost certainly why CognoDB's
+        # edge load hit a server-side timeout on its burst-limited CPU.
+        # Creating the index first turns each MATCH into an O(1) lookup.
         try:
             indexes = create_indexes(session)
         except Exception as e:
             indexes = {"error": str(e)}
+        t_index = time.perf_counter()
+
+        if load_error is None:
+            try:
+                load_edges(session, edges)
+                t_edges = time.perf_counter()
+            except Exception as e:
+                load_error = str(e)
+                t_edges = time.perf_counter()
+        else:
+            t_edges = t_index
 
         try:
             verified_nodes = session.run("MATCH (n:Person) RETURN count(n) AS c").single()["c"]
@@ -119,7 +153,8 @@ def main():
     driver.close()
 
     node_load_s = t_nodes - t0
-    edge_load_s = t_edges - t_nodes
+    index_creation_s = t_index - t_nodes
+    edge_load_s = t_edges - t_index
     total_s = t_edges - t0
 
     result = {
@@ -129,11 +164,13 @@ def main():
             "verified_node_count": verified_nodes,
             "verified_edge_count": verified_edges,
             "node_load_seconds": round(node_load_s, 3),
+            "index_creation_seconds": round(index_creation_s, 3),
             "edge_load_seconds": round(edge_load_s, 3),
             "total_load_seconds": round(total_s, 3),
             "nodes_per_second": round(len(nodes) / node_load_s, 1) if node_load_s > 0 else None,
             "relationships_per_second": round(len(edges) / edge_load_s, 1) if edge_load_s > 0 else None,
             "error": load_error,
+            "cleanup_error": cleanup_error,
         },
         "indexes_created": indexes,
     }

@@ -42,8 +42,9 @@ def fmt(v, suffix=""):
 
 
 def build_load_table(results):
-    lines = ["| Platform | Nodes/sec | Rels/sec | Total load time (s) | Verified count matches source? | Load error |",
-              "|---|---|---|---|---|---|"]
+    lines = ["| Platform | Nodes/sec | Rels/sec | Index creation (s) | Total load time (s) | "
+              "Verified count matches source? | Load error | Cleanup error |",
+              "|---|---|---|---|---|---|---|---|"]
     for platform in PLATFORM_ORDER:
         load = results.get(platform, {}).get("load", {})
         verified = "n/a"
@@ -52,8 +53,9 @@ def build_load_table(results):
         if vn is not None and ve is not None and n is not None and e is not None:
             verified = "yes" if (vn == n and ve == e) else f"NO ({vn}/{ve} vs {n}/{e})"
         lines.append(f"| {platform} | {fmt(load.get('nodes_per_second'))} | "
-                      f"{fmt(load.get('relationships_per_second'))} | {fmt(load.get('total_load_seconds'))} | "
-                      f"{verified} | {load.get('error') or 'none'} |")
+                      f"{fmt(load.get('relationships_per_second'))} | {fmt(load.get('index_creation_seconds'))} | "
+                      f"{fmt(load.get('total_load_seconds'))} | "
+                      f"{verified} | {load.get('error') or 'none'} | {load.get('cleanup_error') or 'none'} |")
     return "\n".join(lines)
 
 
@@ -182,7 +184,8 @@ def main():
         "### Data loading",
         "", build_load_table(results), "",
         "### Indexes actually created", "", build_index_table(results), "",
-        "### Cold start (first query on a fresh connection, before warm-up)",
+        "### Cold start (first query after connecting, before warm-up; "
+        "see Caveats for cross-platform measurement differences)",
         "", build_cold_start_table(results), "",
         "### Traversals, lookups & aggregation (p50 / p95, ms; warmed-up)", "", build_workload_table(results), "",
         "![traversal p95](charts/traversal_p95.png)", "",

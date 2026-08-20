@@ -36,7 +36,19 @@ services:
   falkordb:
     image: falkordb/falkordb:v4.6.2
     container_name: cognodb-bench-falkordb
-    command: ["--maxmemory", "400mb"]
+    # IMPORTANT: do not use `command:` here. The image's default CMD runs
+    # /FalkorDB/build/docker/run.sh, which builds the `redis-server ...
+    # --loadmodule falkordb.so` invocation from the REDIS_ARGS/FALKORDB_ARGS
+    # env vars below. Overriding `command:` replaces that script outright and
+    # silently starts a plain redis-server with the graph module never
+    # loaded (GRAPH.QUERY becomes "unknown command") -- caught by
+    # scripts/check_connections.py before any data was loaded, not after.
+    environment:
+      REDIS_ARGS: "--maxmemory 400mb"
+      BROWSER: "0"  # skip the bundled Node.js graph browser -- not needed
+                    # for a headless benchmark, and leaving it on eats into
+                    # the same 512MB cap the graph engine itself is measured
+                    # under, which would be unfair to FalkorDB specifically.
     ports:
       - "6379:6379"
     cpus: 0.5
