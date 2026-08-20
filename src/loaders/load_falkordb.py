@@ -62,25 +62,39 @@ def main():
     except Exception:
         pass
 
-    t0 = time.perf_counter()
-    for i in range(0, len(nodes), BATCH_SIZE):
-        batch = nodes[i:i + BATCH_SIZE]
-        g.query(
-            "UNWIND $rows AS row CREATE (:Person {id: row.id, email_hash: row.email_hash, dept: row.dept})",
-            params={"rows": batch},
-        )
-    t_nodes = time.perf_counter()
+    load_error = None
+    t0 = t_nodes = t_edges = time.perf_counter()
+    try:
+        for i in range(0, len(nodes), BATCH_SIZE):
+            batch = nodes[i:i + BATCH_SIZE]
+            g.query(
+                "UNWIND $rows AS row CREATE (:Person {id: row.id, email_hash: row.email_hash, dept: row.dept})",
+                params={"rows": batch},
+            )
+        t_nodes = time.perf_counter()
 
-    for i in range(0, len(edges), BATCH_SIZE):
-        batch = edges[i:i + BATCH_SIZE]
-        g.query(
-            "UNWIND $rows AS row MATCH (a:Person {id: row.src}), (b:Person {id: row.dst}) "
-            "CREATE (a)-[:EMAILED]->(b)",
-            params={"rows": batch},
-        )
-    t_edges = time.perf_counter()
+        for i in range(0, len(edges), BATCH_SIZE):
+            batch = edges[i:i + BATCH_SIZE]
+            g.query(
+                "UNWIND $rows AS row MATCH (a:Person {id: row.src}), (b:Person {id: row.dst}) "
+                "CREATE (a)-[:EMAILED]->(b)",
+                params={"rows": batch},
+            )
+        t_edges = time.perf_counter()
+    except Exception as e:
+        load_error = str(e)
+        t_edges = time.perf_counter()
 
-    indexes = create_indexes(g)
+    try:
+        indexes = create_indexes(g)
+    except Exception as e:
+        indexes = {"error": str(e)}
+
+    try:
+        verified_nodes = g.query("MATCH (n:Person) RETURN count(n) AS c").result_set[0][0]
+        verified_edges = g.query("MATCH ()-[r:EMAILED]->() RETURN count(r) AS c").result_set[0][0]
+    except Exception:
+        verified_nodes = verified_edges = None
 
     node_load_s = t_nodes - t0
     edge_load_s = t_edges - t_nodes
@@ -90,11 +104,14 @@ def main():
         "load": {
             "node_count": len(nodes),
             "edge_count": len(edges),
+            "verified_node_count": verified_nodes,
+            "verified_edge_count": verified_edges,
             "node_load_seconds": round(node_load_s, 3),
             "edge_load_seconds": round(edge_load_s, 3),
             "total_load_seconds": round(total_s, 3),
             "nodes_per_second": round(len(nodes) / node_load_s, 1) if node_load_s > 0 else None,
             "relationships_per_second": round(len(edges) / edge_load_s, 1) if edge_load_s > 0 else None,
+            "error": load_error,
         },
         "indexes_created": indexes,
     }

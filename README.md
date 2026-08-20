@@ -64,22 +64,30 @@ resource envelope as CognoDB's free `c0` instance:
 
 | Platform | vCPU | RAM | Disk | How enforced |
 |---|---|---|---|---|
-| CognoDB Cloud | 0.5 (burstable) | 256–512MB (see caveat below) | 1GB | Vendor's free tier, as-is |
+| CognoDB Cloud | burst to 0.5 | 512MB | 1GB (500 IOPS, 200 connections) | Vendor's free "c0" tier, as-is |
 | Neo4j | 0.5 | 512MB (heap capped to 256MB + 128MB page cache) | volume, unbounded but dataset is ~50MB | `docker-compose.yml`: `cpus: 0.5`, `mem_limit: 512m` |
 | Memgraph | 0.5 | 512MB (`--memory-limit=400`) | same | same |
 | FalkorDB | 0.5 | 512MB (`--maxmemory 400mb`) | same | same |
 | ArangoDB | 0.5 | 512MB | same | same |
 
-**Caveat, stated honestly:** the assignment PDF itself gives two different
-numbers for CognoDB's free-tier RAM — 256MB in the prose ("burstable 0.5
-vCPU, 256 MB RAM, 1 GB disk") and 512MB on CognoDB's own pricing page as
-fetched during this project. We capped the four self-hosted platforms at
-512MB (the more generous/verifiable of the two figures) and note this
-discrepancy rather than silently picking one number. If CognoDB's real
-free-tier RAM is 256MB, its numbers below should be read as running on
-*half* the memory of everything else — a real disadvantage for CognoDB, not
-an advantage, so this doesn't flatter the vendor whose product prompted the
-assignment.
+**RAM discrepancy, now resolved:** the assignment PDF's prose says CognoDB's
+free tier is "256 MB RAM"; cognodb.com/pricing, fetched directly on
+2026-08-20, states "512 MB" (along with "burst to 0.5 vCPU," "1 GB" disk,
+"200" connections, "up to 500 IOPS," "no card required"). We're treating the
+live pricing page as authoritative since it's the more specific, checkable,
+and current source, and capped the four self-hosted platforms to match it
+(512MB). If you re-run this later and CognoDB's page has changed, re-check
+and update this line — vendor pricing pages are not a fixed target.
+
+**CognoDB instance region:** `us-east4` (N. Virginia) — the only region
+offered on the free `c0` tier at signup time (2026-08-20); there was no
+region picker to choose a closer location. The benchmark client itself runs
+from India. The four self-hosted platforms run in Docker on that same
+machine, so they have effectively zero network latency; CognoDB is a real
+cross-continent network hop. This is a genuine, unavoidable asymmetry given
+the assignment mandates CognoDB Cloud specifically and its free tier is
+single-region — documented here rather than hidden, and discussed further in
+[Caveats](#caveats--honest-limitations).
 
 ## Dataset
 
@@ -119,6 +127,11 @@ This is a deliberate, stated choice — see [Caveats](#caveats--honest-limitatio
   (`src/common/queries.py`) are shared verbatim across CognoDB/Neo4j/
   Memgraph/FalkorDB; AQL translations for ArangoDB express the identical
   logical query (same hop depth, same filter, same aggregation).
+- **Cold start:** the very first query issued on a fresh connection (before
+  any warm-up) is timed separately and reported as `cold_start_ms`, distinct
+  from every category's warmed-up p50/p95/p99 below — see the assignment's
+  "what a strong submission looks like" note on separating warm vs. cold
+  numbers.
 - **Warm-up:** 20 untimed iterations per query category before measurement.
 - **Measurement:** 100 timed iterations per read workload (exceeds the
   assignment's suggested ≥100 minimum), wall-clock per-call latency
@@ -134,6 +147,17 @@ This is a deliberate, stated choice — see [Caveats](#caveats--honest-limitatio
 - **Automation:** `scripts/run_all.ps1` / `run_all.sh` run the entire
   pipeline — dataset prep, load, workloads, footprint, report — with zero
   manual steps beyond providing credentials in `.env`.
+- **Failure isolation:** every load/query/mixed-workload step is individually
+  caught. A single platform timing out, throttling, or dropping a connection
+  is recorded as `"error": "..."` in that platform's `results/<platform>.json`
+  and the harness moves on — it does not discard already-collected results
+  for that platform, and it does not abort benchmarking of the other four.
+  This is what makes "record every caveat honestly... timeouts, failed runs"
+  (assignment §5.3) actually enforceable rather than aspirational.
+- **Load verification:** after loading, each loader re-queries the platform
+  for its actual node/relationship count (`verified_node_count` /
+  `verified_edge_count` in the results JSON) so "identical dataset on every
+  platform" is a checked fact, not just an assumption.
 
 ## Reproducing this benchmark
 
@@ -149,6 +173,10 @@ cp .env.example .env
 
 docker compose up -d   # starts neo4j, memgraph, falkordb, arangodb,
                         # each capped to 0.5 vCPU / 512MB (see docker-compose.yml)
+
+python scripts/check_connections.py   # optional but recommended pre-flight:
+                                       # confirms all 5 platforms are reachable
+                                       # before committing to a full run
 
 # Windows
 powershell -ExecutionPolicy Bypass -File scripts/run_all.ps1
@@ -214,11 +242,17 @@ read it as a claim that these are the actual findings._
   the results rather than averaged away.
 - **CognoDB's actual free-tier RAM is ambiguous (256MB per the assignment
   PDF vs. 512MB per CognoDB's own site)** — see [Fairness](#fairness-resource-parity-across-every-platform).
-- **Network path is not identical.** CognoDB is a real network hop to a
-  managed cloud instance; the four Docker platforms are localhost. This
-  understates CognoDB's latency disadvantage in absolute terms less than
-  you'd think (Bolt driver round-trips are usually the dominant cost, not
-  the last few ms of network), but it is a real, stated asymmetry.
+- **Network path is not identical, and it's a large asymmetry here.** The
+  free `c0` tier offered exactly one region at signup — `us-east4` (N.
+  Virginia) — with no picker to choose something closer. The benchmark
+  client runs from India, so CognoDB's numbers below include a real
+  cross-continent round trip (likely tens of ms per query) on top of query
+  execution time; the four Docker platforms are localhost with effectively
+  zero network latency. This is not a query-engine difference — it's an
+  unavoidable consequence of the free tier being single-region and the
+  assignment mandating CognoDB Cloud specifically. Read CognoDB's absolute
+  latency numbers with this in mind rather than attributing the full gap to
+  the database engine itself.
 - **Single-run variance is not fully characterized.** The harness reports
   percentiles within a run; it does not yet repeat full runs N times to
   report run-to-run variance. Flagged as a stretch item, not silently

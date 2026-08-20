@@ -63,23 +63,26 @@ def mixed_workload_worker(cfg, start_nodes, node_ids, write_ratio, seq_counter, 
 def run_mixed_workload(cfg, start_nodes, node_ids, concurrency_levels):
     results = {}
     for concurrency in concurrency_levels:
-        seq_counter = [0]
-        lock = threading.Lock()
-        stop_at = time.perf_counter() + MIXED_WORKLOAD_DURATION_S
-        t0 = time.perf_counter()
-        with ThreadPoolExecutor(max_workers=concurrency) as pool:
-            futures = [pool.submit(mixed_workload_worker, cfg, start_nodes, node_ids,
-                                    MIXED_WORKLOAD_WRITE_RATIO, seq_counter, lock, stop_at)
-                       for _ in range(concurrency)]
-            total_ops = sum(f.result() for f in futures)
-        elapsed = time.perf_counter() - t0
-        results[str(concurrency)] = {
-            "concurrency": concurrency,
-            "duration_seconds": round(elapsed, 2),
-            "total_ops": total_ops,
-            "ops_per_second": round(total_ops / elapsed, 1),
-            "write_ratio": MIXED_WORKLOAD_WRITE_RATIO,
-        }
+        try:
+            seq_counter = [0]
+            lock = threading.Lock()
+            stop_at = time.perf_counter() + MIXED_WORKLOAD_DURATION_S
+            t0 = time.perf_counter()
+            with ThreadPoolExecutor(max_workers=concurrency) as pool:
+                futures = [pool.submit(mixed_workload_worker, cfg, start_nodes, node_ids,
+                                        MIXED_WORKLOAD_WRITE_RATIO, seq_counter, lock, stop_at)
+                           for _ in range(concurrency)]
+                total_ops = sum(f.result() for f in futures)
+            elapsed = time.perf_counter() - t0
+            results[str(concurrency)] = {
+                "concurrency": concurrency,
+                "duration_seconds": round(elapsed, 2),
+                "total_ops": total_ops,
+                "ops_per_second": round(total_ops / elapsed, 1),
+                "write_ratio": MIXED_WORKLOAD_WRITE_RATIO,
+            }
+        except Exception as e:
+            results[str(concurrency)] = {"concurrency": concurrency, "error": str(e)}
     return results
 
 
@@ -99,23 +102,37 @@ def main():
     g = db.select_graph(cfg["graph"])
 
     rng = random.Random(1)
+    try:
+        cold_id = rng.choice(start_nodes)
+        t0 = time.perf_counter()
+        g.query(queries.CYPHER_POINT_LOOKUP, params={"id": cold_id})
+        cold_start_ms = round((time.perf_counter() - t0) * 1000.0, 3)
+    except Exception as e:
+        cold_start_ms = {"error": str(e)}
+
     category_results = {}
-    category_results.update(bench_category(
-        g, "point_lookup", queries.CYPHER_POINT_LOOKUP, lambda: {"id": rng.choice(start_nodes)}))
-    category_results.update(bench_category(
-        g, "filtered_lookup", queries.CYPHER_FILTERED_LOOKUP, lambda: {"dept": rng.choice(DEPARTMENTS)}))
-    category_results.update(bench_category(
-        g, "hop_1", queries.CYPHER_HOP_1, lambda: {"id": rng.choice(start_nodes)}))
-    category_results.update(bench_category(
-        g, "hop_2", queries.CYPHER_HOP_2, lambda: {"id": rng.choice(start_nodes)}))
-    category_results.update(bench_category(
-        g, "hop_3", queries.CYPHER_HOP_3, lambda: {"id": rng.choice(start_nodes)}))
-    category_results.update(bench_category(
-        g, "aggregation", queries.CYPHER_AGGREGATION, lambda: {}))
+    category_results.update(stats.safe("point_lookup", lambda: bench_category(
+        g, "point_lookup", queries.CYPHER_POINT_LOOKUP, lambda: {"id": rng.choice(start_nodes)})))
+    category_results.update(stats.safe("filtered_lookup", lambda: bench_category(
+        g, "filtered_lookup", queries.CYPHER_FILTERED_LOOKUP, lambda: {"dept": rng.choice(DEPARTMENTS)})))
+    category_results.update(stats.safe("hop_1", lambda: bench_category(
+        g, "hop_1", queries.CYPHER_HOP_1, lambda: {"id": rng.choice(start_nodes)})))
+    category_results.update(stats.safe("hop_2", lambda: bench_category(
+        g, "hop_2", queries.CYPHER_HOP_2, lambda: {"id": rng.choice(start_nodes)})))
+    category_results.update(stats.safe("hop_3", lambda: bench_category(
+        g, "hop_3", queries.CYPHER_HOP_3, lambda: {"id": rng.choice(start_nodes)})))
+    category_results.update(stats.safe("aggregation", lambda: bench_category(
+        g, "aggregation", queries.CYPHER_AGGREGATION, lambda: {})))
 
-    mixed = {} if args.skip_mixed else run_mixed_workload(cfg, start_nodes, all_ids, args.concurrency)
+    if args.skip_mixed:
+        mixed = {}
+    else:
+        try:
+            mixed = run_mixed_workload(cfg, start_nodes, all_ids, args.concurrency)
+        except Exception as e:
+            mixed = {"error": str(e)}
 
-    result = {"workloads": category_results, "mixed_workload": mixed}
+    result = {"workloads": category_results, "mixed_workload": mixed, "cold_start_ms": cold_start_ms}
     path = stats.write_result(config.RESULTS_DIR, "falkordb", result)
     print(f"Wrote {path}")
     print(json.dumps(result, indent=2))

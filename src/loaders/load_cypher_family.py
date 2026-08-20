@@ -87,19 +87,34 @@ def main():
     driver = GraphDatabase.driver(target.uri, auth=(target.user, target.password))
     driver.verify_connectivity()
 
+    load_error = None
+    verified_nodes = verified_edges = None
     with driver.session() as session:
         try:
             session.run("MATCH (n:Person) DETACH DELETE n").consume()
         except Exception:
             pass
 
-        t0 = time.perf_counter()
-        load_nodes(session, nodes)
-        t_nodes = time.perf_counter()
-        load_edges(session, edges)
-        t_edges = time.perf_counter()
+        t0 = t_nodes = t_edges = time.perf_counter()
+        try:
+            load_nodes(session, nodes)
+            t_nodes = time.perf_counter()
+            load_edges(session, edges)
+            t_edges = time.perf_counter()
+        except Exception as e:
+            load_error = str(e)
+            t_edges = time.perf_counter()
 
-        indexes = create_indexes(session)
+        try:
+            indexes = create_indexes(session)
+        except Exception as e:
+            indexes = {"error": str(e)}
+
+        try:
+            verified_nodes = session.run("MATCH (n:Person) RETURN count(n) AS c").single()["c"]
+            verified_edges = session.run("MATCH ()-[r:EMAILED]->() RETURN count(r) AS c").single()["c"]
+        except Exception:
+            pass
 
     driver.close()
 
@@ -111,11 +126,14 @@ def main():
         "load": {
             "node_count": len(nodes),
             "edge_count": len(edges),
+            "verified_node_count": verified_nodes,
+            "verified_edge_count": verified_edges,
             "node_load_seconds": round(node_load_s, 3),
             "edge_load_seconds": round(edge_load_s, 3),
             "total_load_seconds": round(total_s, 3),
             "nodes_per_second": round(len(nodes) / node_load_s, 1) if node_load_s > 0 else None,
             "relationships_per_second": round(len(edges) / edge_load_s, 1) if edge_load_s > 0 else None,
+            "error": load_error,
         },
         "indexes_created": indexes,
     }

@@ -32,6 +32,16 @@ class Timer:
         }
 
 
+def safe(name, fn):
+    """Run fn(); on any exception, return {name: {"error": str(e)}} instead of
+    propagating, so one failed query/category/concurrency-level doesn't discard
+    already-collected results for the same platform or crash the whole run."""
+    try:
+        return fn()
+    except Exception as e:
+        return {name: {"error": str(e)}}
+
+
 def write_result(results_dir, platform: str, payload: dict):
     results_dir.mkdir(parents=True, exist_ok=True)
     path = results_dir / f"{platform}.json"

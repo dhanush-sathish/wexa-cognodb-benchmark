@@ -108,6 +108,54 @@ graded-submission version of this):
   favoring cross-platform fairness over each vendor's best-case ingest
   number.
 
+## Session 2 (2026-08-20): pre-flight gap review, before running against real CognoDB
+
+Re-read the PDF requirement-by-requirement against the actual code (not just
+the README's claims about it) before starting the real CognoDB setup. Found
+and fixed:
+
+- **Failure isolation.** Previously, one failed query/category/concurrency
+  level would raise an uncaught exception and `write_result` (called only at
+  the end of `main()`) would never run — silently discarding every
+  already-collected category for that platform, and (on `run_all.sh`, which
+  had `set -e`) aborting the rest of the pipeline too. Now every load step,
+  workload category, and mixed-workload concurrency level is individually
+  wrapped; failures are recorded as `{"error": "..."}` in the results JSON
+  and the harness moves on. `run_all.ps1`/`run_all.sh` now summarize which
+  steps failed at the end instead of dying on the first one. This is what
+  makes the assignment's "record every caveat honestly... timeouts, failed
+  runs" actually true under a real, occasionally-throttled free-tier
+  connection, rather than aspirational.
+- **Cold-start latency** (`cold_start_ms`) is now captured — the first query
+  on a fresh connection, before the warm-up loop — and rendered in its own
+  README table, addressing the "separate warm vs. cold numbers" trait from
+  the assignment's "what a strong submission looks like" section.
+- **Post-load count verification** (`verified_node_count`/`verified_edge_count`)
+  — each loader now re-queries the platform after loading and compares
+  against the source CSV counts, so "identical dataset on every platform" is
+  a checked fact in the README table, not an assumption.
+- **RAM ambiguity resolved.** Fetched cognodb.com/pricing directly (2026-08-20):
+  free tier is 512MB RAM / burst 0.5 vCPU / 1GB disk / 200 connections / 500
+  IOPS. README now cites this instead of leaving the PDF's "256MB" vs. the
+  site's "512MB" as an open question.
+- **`scripts/check_connections.py` added** — a pre-flight smoke test for all
+  5 platforms, so a bad `.env` value or a container that isn't up yet is
+  caught in seconds instead of partway through a 20+ minute run.
+- Fixed a stale comment in `download_dataset.py` (said ~183,831 edges; the
+  pipeline actually loads all 367,662 directed edges — the directed/undirected
+  distinction was already explained in the README, the docstring just hadn't
+  been updated to match).
+- All changes verified: `python -m py_compile` clean on every touched file,
+  `pytest tests/` 5/5, and `aggregate_results.py`'s new table logic (verified-count
+  mismatch detection, per-category/per-concurrency error rendering, cold-start
+  table) dry-run tested against synthetic results in an isolated scratch copy
+  — the real `README.md`/`results/` were not touched by that test.
+
+**Not yet done, flagged as optional given the 48h window:** run-to-run
+variance (running the full pipeline N times and reporting spread) — the
+assignment lists this as a "strong submission" trait, not a requirement.
+Deferred pending a decision on whether there's time after the first full run.
+
 ## Suggested next steps (for you)
 
 1. Sign up at console.cognodb.com/signup, create the free c0 instance, copy

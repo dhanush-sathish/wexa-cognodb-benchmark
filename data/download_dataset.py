@@ -3,9 +3,13 @@ Downloads the SNAP email-Enron dataset (public domain, Stanford Network Analysis
 Project). Source: https://snap.stanford.edu/data/email-Enron.html
 
 Nodes are anonymized Enron email addresses (int IDs). An edge i->j means i sent
-at least one email to j. ~36,692 nodes / ~183,831 edges -- fits comfortably
-inside a 1GB / 512MB-RAM free tier, satisfies the >=100k relationships
-requirement, and sits inside the assignment's suggested 100k-500k range.
+at least one email to j. The raw file has ~36,692 nodes and ~183,831
+*undirected* communicating pairs, but lists both directions of each pair as
+separate directed lines -- data/prepare_dataset.py keeps that directed
+representation as-is (367,662 directed edges), which still fits comfortably
+inside a 1GB / 512MB-RAM free tier and sits inside the assignment's suggested
+100k-500k relationship range. See README.md's Dataset section for why the
+directed and undirected counts differ.
 """
 import gzip
 import shutil

@@ -42,11 +42,30 @@ def fmt(v, suffix=""):
 
 
 def build_load_table(results):
-    lines = ["| Platform | Nodes/sec | Rels/sec | Total load time (s) |", "|---|---|---|---|"]
+    lines = ["| Platform | Nodes/sec | Rels/sec | Total load time (s) | Verified count matches source? | Load error |",
+              "|---|---|---|---|---|---|"]
     for platform in PLATFORM_ORDER:
         load = results.get(platform, {}).get("load", {})
+        verified = "n/a"
+        vn, ve = load.get("verified_node_count"), load.get("verified_edge_count")
+        n, e = load.get("node_count"), load.get("edge_count")
+        if vn is not None and ve is not None and n is not None and e is not None:
+            verified = "yes" if (vn == n and ve == e) else f"NO ({vn}/{ve} vs {n}/{e})"
         lines.append(f"| {platform} | {fmt(load.get('nodes_per_second'))} | "
-                      f"{fmt(load.get('relationships_per_second'))} | {fmt(load.get('total_load_seconds'))} |")
+                      f"{fmt(load.get('relationships_per_second'))} | {fmt(load.get('total_load_seconds'))} | "
+                      f"{verified} | {load.get('error') or 'none'} |")
+    return "\n".join(lines)
+
+
+def build_cold_start_table(results):
+    lines = ["| Platform | Cold-start first query (ms) |", "|---|---|"]
+    for platform in PLATFORM_ORDER:
+        cs = results.get(platform, {}).get("cold_start_ms")
+        if isinstance(cs, dict):
+            cell = f"error: {cs.get('error')}"
+        else:
+            cell = fmt(cs)
+        lines.append(f"| {platform} | {cell} |")
     return "\n".join(lines)
 
 
@@ -58,7 +77,10 @@ def build_workload_table(results):
         cells = []
         for cat in HOP_CATEGORIES:
             w = workloads.get(cat, {})
-            cells.append(f"{fmt(w.get('p50_ms'))} / {fmt(w.get('p95_ms'))}")
+            if "error" in w:
+                cells.append(f"error: {w['error'][:40]}")
+            else:
+                cells.append(f"{fmt(w.get('p50_ms'))} / {fmt(w.get('p95_ms'))}")
         lines.append(f"| {platform} | " + " | ".join(cells) + " |")
     return "\n".join(lines)
 
@@ -71,7 +93,13 @@ def build_mixed_table(results):
               "|---|" + "|".join(["---"] * len(concurrencies)) + "|"]
     for platform in PLATFORM_ORDER:
         mixed = results.get(platform, {}).get("mixed_workload", {})
-        cells = [fmt(mixed.get(str(c), {}).get("ops_per_second")) for c in concurrencies]
+        cells = []
+        for c in concurrencies:
+            level = mixed.get(str(c), {})
+            if "error" in level:
+                cells.append(f"error: {level['error'][:30]}")
+            else:
+                cells.append(fmt(level.get("ops_per_second")))
         lines.append(f"| {platform} | " + " | ".join(cells) + " |")
     return "\n".join(lines)
 
@@ -154,7 +182,9 @@ def main():
         "### Data loading",
         "", build_load_table(results), "",
         "### Indexes actually created", "", build_index_table(results), "",
-        "### Traversals, lookups & aggregation (p50 / p95, ms)", "", build_workload_table(results), "",
+        "### Cold start (first query on a fresh connection, before warm-up)",
+        "", build_cold_start_table(results), "",
+        "### Traversals, lookups & aggregation (p50 / p95, ms; warmed-up)", "", build_workload_table(results), "",
         "![traversal p95](charts/traversal_p95.png)", "",
         "### Mixed read/write workload", "", build_mixed_table(results), "",
         "![mixed workload throughput](charts/mixed_workload_throughput.png)", "",

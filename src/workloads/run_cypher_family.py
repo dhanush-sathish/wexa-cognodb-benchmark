@@ -64,28 +64,33 @@ def mixed_workload_worker(driver, start_nodes, node_ids, duration_s, write_ratio
 def run_mixed_workload(target, start_nodes, node_ids, concurrency_levels):
     results = {}
     for concurrency in concurrency_levels:
-        seq_counter = [0]
-        lock = threading.Lock()
-        drivers = [GraphDatabase.driver(target.uri, auth=(target.user, target.password))
-                   for _ in range(concurrency)]
-        stop_at = time.perf_counter() + MIXED_WORKLOAD_DURATION_S
-        t0 = time.perf_counter()
-        with ThreadPoolExecutor(max_workers=concurrency) as pool:
-            futures = [pool.submit(mixed_workload_worker, drivers[i], start_nodes, node_ids,
-                                    MIXED_WORKLOAD_DURATION_S, MIXED_WORKLOAD_WRITE_RATIO,
-                                    seq_counter, lock, stop_at)
-                       for i in range(concurrency)]
-            total_ops = sum(f.result() for f in futures)
-        elapsed = time.perf_counter() - t0
-        for d in drivers:
-            d.close()
-        results[str(concurrency)] = {
-            "concurrency": concurrency,
-            "duration_seconds": round(elapsed, 2),
-            "total_ops": total_ops,
-            "ops_per_second": round(total_ops / elapsed, 1),
-            "write_ratio": MIXED_WORKLOAD_WRITE_RATIO,
-        }
+        drivers = []
+        try:
+            seq_counter = [0]
+            lock = threading.Lock()
+            drivers = [GraphDatabase.driver(target.uri, auth=(target.user, target.password))
+                       for _ in range(concurrency)]
+            stop_at = time.perf_counter() + MIXED_WORKLOAD_DURATION_S
+            t0 = time.perf_counter()
+            with ThreadPoolExecutor(max_workers=concurrency) as pool:
+                futures = [pool.submit(mixed_workload_worker, drivers[i], start_nodes, node_ids,
+                                        MIXED_WORKLOAD_DURATION_S, MIXED_WORKLOAD_WRITE_RATIO,
+                                        seq_counter, lock, stop_at)
+                           for i in range(concurrency)]
+                total_ops = sum(f.result() for f in futures)
+            elapsed = time.perf_counter() - t0
+            results[str(concurrency)] = {
+                "concurrency": concurrency,
+                "duration_seconds": round(elapsed, 2),
+                "total_ops": total_ops,
+                "ops_per_second": round(total_ops / elapsed, 1),
+                "write_ratio": MIXED_WORKLOAD_WRITE_RATIO,
+            }
+        except Exception as e:
+            results[str(concurrency)] = {"concurrency": concurrency, "error": str(e)}
+        finally:
+            for d in drivers:
+                d.close()
     return results
 
 
@@ -108,29 +113,47 @@ def main():
 
     rng = random.Random(1)
     category_results = {}
+    cold_start_ms = None
     with driver.session() as session:
-        category_results.update(bench_category(
-            session, "point_lookup", queries.CYPHER_POINT_LOOKUP,
-            lambda: {"id": rng.choice(start_nodes)}))
-        category_results.update(bench_category(
-            session, "filtered_lookup", queries.CYPHER_FILTERED_LOOKUP,
-            lambda: {"dept": rng.choice(DEPARTMENTS)}))
-        category_results.update(bench_category(
-            session, "hop_1", queries.CYPHER_HOP_1,
-            lambda: {"id": rng.choice(start_nodes)}))
-        category_results.update(bench_category(
-            session, "hop_2", queries.CYPHER_HOP_2,
-            lambda: {"id": rng.choice(start_nodes)}))
-        category_results.update(bench_category(
-            session, "hop_3", queries.CYPHER_HOP_3,
-            lambda: {"id": rng.choice(start_nodes)}))
-        category_results.update(bench_category(
-            session, "aggregation", queries.CYPHER_AGGREGATION, lambda: {}))
+        try:
+            cold_id = rng.choice(start_nodes)
+            t0 = time.perf_counter()
+            session.run(queries.CYPHER_POINT_LOOKUP, id=cold_id).consume()
+            cold_start_ms = round((time.perf_counter() - t0) * 1000.0, 3)
+        except Exception as e:
+            cold_start_ms = {"error": str(e)}
 
-    mixed = {} if args.skip_mixed else run_mixed_workload(target, start_nodes, all_ids, args.concurrency)
+        category_results.update(stats.safe("point_lookup", lambda: bench_category(
+            session, "point_lookup", queries.CYPHER_POINT_LOOKUP,
+            lambda: {"id": rng.choice(start_nodes)})))
+        category_results.update(stats.safe("filtered_lookup", lambda: bench_category(
+            session, "filtered_lookup", queries.CYPHER_FILTERED_LOOKUP,
+            lambda: {"dept": rng.choice(DEPARTMENTS)})))
+        category_results.update(stats.safe("hop_1", lambda: bench_category(
+            session, "hop_1", queries.CYPHER_HOP_1,
+            lambda: {"id": rng.choice(start_nodes)})))
+        category_results.update(stats.safe("hop_2", lambda: bench_category(
+            session, "hop_2", queries.CYPHER_HOP_2,
+            lambda: {"id": rng.choice(start_nodes)})))
+        category_results.update(stats.safe("hop_3", lambda: bench_category(
+            session, "hop_3", queries.CYPHER_HOP_3,
+            lambda: {"id": rng.choice(start_nodes)})))
+        category_results.update(stats.safe("aggregation", lambda: bench_category(
+            session, "aggregation", queries.CYPHER_AGGREGATION, lambda: {})))
+
+    if args.skip_mixed:
+        mixed = {}
+    else:
+        # run_mixed_workload already catches errors per concurrency level, so a
+        # top-level exception here means the setup itself failed (e.g. bad start
+        # node list) -- still caught so it doesn't discard category_results above.
+        try:
+            mixed = run_mixed_workload(target, start_nodes, all_ids, args.concurrency)
+        except Exception as e:
+            mixed = {"error": str(e)}
     driver.close()
 
-    result = {"workloads": category_results, "mixed_workload": mixed}
+    result = {"workloads": category_results, "mixed_workload": mixed, "cold_start_ms": cold_start_ms}
     path = stats.write_result(config.RESULTS_DIR, args.platform, result)
     print(f"Wrote {path}")
     print(json.dumps(result, indent=2))
